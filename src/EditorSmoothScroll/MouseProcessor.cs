@@ -131,8 +131,11 @@ internal class MouseProcessor : MouseProcessorBase
 
     private void Reset()
     {
-        distanceToScroll = 0;
-        zoomLevelDifference = 0;
+        lock (locker)
+        {
+            distanceToScroll = 0;
+            zoomLevelDifference = 0;
+        }
         cancellationToken = CancellationToken.None;
         cancellationTokenSource = null;
         scrollJobWorker = null;
