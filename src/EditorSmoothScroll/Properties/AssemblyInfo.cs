@@ -1,0 +1,14 @@
+﻿[
+	assembly:
+	ComVisible(false),
+	AssemblyTitle(Vsix.Name),
+	AssemblyProduct(Vsix.Name),
+	AssemblyDescription(Vsix.Description),
+	AssemblyCompany(Vsix.Author),
+	AssemblyCopyright(Vsix.Author),
+	AssemblyTrademark(""),
+	AssemblyCulture(""),
+	AssemblyConfiguration(""),
+	AssemblyVersion(Vsix.Version),
+	AssemblyFileVersion(Vsix.Version)
+]
