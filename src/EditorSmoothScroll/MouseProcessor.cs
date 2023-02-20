@@ -1,9 +1,5 @@
 ﻿namespace EditorSmoothScroll;
 
-#pragma warning disable IDE0052
-
-// TODO: Implement smooth zooming
-
 internal class MouseProcessor : MouseProcessorBase
 {
     public MouseProcessor(IWpfTextView wpfTextView, ExtensionOptions options)
@@ -14,111 +10,144 @@ internal class MouseProcessor : MouseProcessorBase
 
     public override void PreprocessMouseWheel(MouseWheelEventArgs e)
     {
-        if (!options?.IsExtensionEnabled ?? false)
-            return;
+        if (!options?.IsExtensionEnabled ?? false) return;
 
         if (Utilities.CheckKeys(Key.LeftCtrl, Key.RightCtrl))
-            return;
-
-        if (options.UseShiftForHorizontalScrolling &&
-            Utilities.CheckKeys(Key.LeftShift, Key.RightShift))
         {
-            StartScroll(-e.Delta, ScrollDirection.Horizontal);
+            StartZoomJob(Math.Sign(e.Delta) * 50);
             e.Handled = true;
             return;
         }
 
-        StartScroll(e.Delta, ScrollDirection.Vertical);
+        StartScrollJob(
+            scrollDirection == ScrollDirection.Horizontal ? -e.Delta : e.Delta, 
+            Utilities.CheckKeys(Key.LeftShift, Key.RightShift) ? ScrollDirection.Horizontal : ScrollDirection.Vertical);
         e.Handled = true;
     }
 
     public override void PostprocessMouseDown(MouseButtonEventArgs e)
     {
-        cancellationTokenSource?.Cancel();
-        Cleanup();
-    }
-
-    private void ScrollWorker_Execute()
-    {
-        time = Utilities.GetTimeOffset();
-
-        while (Math.Abs(currentDistance) > 0 && !cancellationTokenSource.IsCancellationRequested)
+        if (scrollJobWorker?.Status is TaskStatus.Running ||
+            zoomJobWorker?.Status is TaskStatus.Running)
         {
-            var offset = Utilities.GetTimeOffset();
-            delta = offset - time;
-
-            ScrollWorker_Update();
-
-            time = offset;
+            cancellationTokenSource?.Cancel();
+            Reset();
         }
-
-        Cleanup();
     }
 
-    private void ScrollWorker_Update()
+    private async ValueTask ScrollViewportAsync(double distanceToScroll, ScrollDirection scrollDirection)
     {
-        if (!options?.IsExtensionEnabled ?? false)
-            return;
-
-        lock (locker)
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        switch (scrollDirection)
         {
-            currentDistance = Utilities.Interpolate(currentDistance, 0, delta, options.EasingFunction);
-            totalDistance = currentDistance;
+            case ScrollDirection.Horizontal:
+                wpfTextView.ViewScroller.ScrollViewportHorizontallyByPixels(distanceToScroll);
+                break;
+            case ScrollDirection.Vertical:
+                wpfTextView.ViewScroller.ScrollViewportVerticallyByPixels(distanceToScroll);
+                break;
         }
-
-        ScrollViewport(totalDistance * delta, direction);
     }
 
-    private void ScrollViewport(double amount, ScrollDirection direction)
+    private async ValueTask ZoomViewportAsync(double zoomLevelDifference)
     {
-        ThreadHelper.JoinableTaskFactory.Run(async () =>
-        {
-            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
-
-            switch (direction)
-            {
-                case ScrollDirection.Horizontal:
-                    wpfTextView.ViewScroller.ScrollViewportHorizontallyByPixels(amount);
-                    break;
-                case ScrollDirection.Vertical:
-                    wpfTextView.ViewScroller.ScrollViewportVerticallyByPixels(amount);
-                    break;
-            }
-        });
+        await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+        wpfTextView.ZoomLevel += zoomLevelDifference;
     }
 
-    private void StartScroll(double amount, ScrollDirection direction)
+    private void StartScrollJob(double distanceToScroll, ScrollDirection scrollDirection)
     {
         lock (locker)
         {
-            bool isNewDirection = this.direction != direction;
-            this.direction = direction;
-            currentDistance = !isNewDirection ? currentDistance + amount : 0;
+            bool isNewDirection = this.scrollDirection != scrollDirection;
+            this.scrollDirection = scrollDirection;
+            this.distanceToScroll = isNewDirection ? 0 : this.distanceToScroll + distanceToScroll;
         }
 
         cancellationTokenSource = new();
         cancellationToken = cancellationTokenSource.Token;
-        scrollWorker ??= Task.Run(ScrollWorker_Execute, cancellationToken);
+        scrollJobWorker ??= Task.Run(ScrollJob_ExecuteAsync, cancellationToken);
     }
 
-    private void Cleanup()
+    private void StartZoomJob(double zoomLevelDifference)
     {
-        totalDistance = currentDistance = 0;
+        lock (locker)
+            this.zoomLevelDifference += zoomLevelDifference;
+
+        cancellationTokenSource = new();
+        cancellationToken = cancellationTokenSource.Token;
+        zoomJobWorker ??= Task.Run(ZoomJob_ExecuteAsync, cancellationToken);
+    }
+
+    private async ValueTask ScrollJob_ExecuteAsync()
+    {
+        time = Utilities.GetTimeOffset();
+
+        while (Math.Abs(Math.Round(distanceToScroll)) > 0 && !cancellationTokenSource.IsCancellationRequested)
+        {
+            var offset = Utilities.GetTimeOffset();
+            deltaTime = offset - time;
+            await ScrollJob_UpdateAsync();
+            time = offset;
+        }
+
+        Reset();
+    }
+
+    private async ValueTask ZoomJob_ExecuteAsync()
+    {
+        time = Utilities.GetTimeOffset();
+
+        while (Math.Abs(Math.Round(zoomLevelDifference)) > 0 && !cancellationTokenSource.IsCancellationRequested)
+        {
+            var offset = Utilities.GetTimeOffset();
+            deltaTime = offset - time;
+            await ZoomJob_UpdateAsync();
+            time = offset;
+        }
+
+        Reset();
+    }
+
+    private async ValueTask ScrollJob_UpdateAsync()
+    {
+        if (!options?.IsExtensionEnabled ?? false) return;
+
+        lock (locker)
+            distanceToScroll = Utilities.Interpolate(distanceToScroll, 0, deltaTime, options.EasingFunction);
+
+        await ScrollViewportAsync(distanceToScroll * deltaTime, scrollDirection);
+    }
+
+    private async ValueTask ZoomJob_UpdateAsync()
+    {
+        if (!options?.IsExtensionEnabled ?? false) return;
+
+        lock (locker)
+            zoomLevelDifference = Utilities.Interpolate(zoomLevelDifference, 0, deltaTime, options.EasingFunction);
+
+        await ZoomViewportAsync(zoomLevelDifference * deltaTime);
+    }
+
+    private void Reset()
+    {
+        distanceToScroll = 0;
+        zoomLevelDifference = 0;
         cancellationToken = CancellationToken.None;
         cancellationTokenSource = null;
-        scrollWorker = null;
+        scrollJobWorker = null;
+        zoomJobWorker = null;
     }
 
-    private readonly Locker locker = new();
     private readonly IWpfTextView wpfTextView;
     private readonly ExtensionOptions options;
+    private readonly Locker locker = new();
 
-    private ScrollDirection direction = ScrollDirection.Vertical;
-    private Task scrollWorker = null;
+    private double distanceToScroll, zoomLevelDifference, time, deltaTime;
     private CancellationTokenSource cancellationTokenSource;
     private CancellationToken cancellationToken;
-    private double totalDistance, currentDistance;
-    private double time, delta;
+    private Task scrollJobWorker, zoomJobWorker = null;
+    private ScrollDirection scrollDirection = ScrollDirection.Vertical;
 
     private enum ScrollDirection
     {
@@ -126,5 +155,3 @@ internal class MouseProcessor : MouseProcessorBase
         Vertical,
     }
 }
-
-#pragma warning restore IDE0052
