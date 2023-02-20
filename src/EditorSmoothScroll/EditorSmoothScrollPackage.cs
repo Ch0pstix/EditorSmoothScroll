@@ -17,11 +17,11 @@
     "Menus.ctmenu", 1)]
 [ProvideOptionPage(
     typeof(OptionsProvider.ExtensionOptions),
-    "Editor Smooth Scroll", "Extension",
+    "Editor Smooth Scroll", "General",
     0, 0, true, SupportsProfiles = true)]
 [ProvideProfile(
     typeof(OptionsProvider.ExtensionOptions),
-    "Editor Smooth Scroll", "Extension",
+    "Editor Smooth Scroll", "General",
     0, 0, true)]
 [Guid(PackageGuids.EditorSmoothScrollString)]
 public sealed partial class EditorSmoothScrollPackage : ToolkitPackage
